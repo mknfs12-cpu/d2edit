@@ -1,0 +1,17 @@
+{
+  "name": "D2 Survivors 세이브 도구",
+  "short_name": "D2 세이브",
+  "description": "D2 Survivors 세이브 코드를 기기 안에서 편집하는 도구",
+  "start_url": "./d2s_tool.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14100e",
+  "theme_color": "#14100e",
+  "lang": "ko",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
