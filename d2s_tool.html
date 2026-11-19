@@ -308,36 +308,82 @@ function extractSaveCode(input) {
   if (!input) return null;
   let s = String(input);
 
-  // 보이지 않는 문자 제거 (BOM, 제로폭, NBSP 등)
-  s = s.replace(/[\uFEFF\u200B-\u200D\u2060\u00A0]/g, "");
+  // 보이지 않는 문자 제거 (BOM, 제로폭, NBSP, 각종 유니코드 공백 등)
+  s = s.replace(/[\uFEFF\u200B-\u200F\u2060\u00A0\u3000\u180E\u061C]/g, "");
+  // 스마트 따옴표·전각 문자 등을 일반 문자로 (모바일 키보드/메신저 변형 대비)
+  s = s.replace(/[\u2018\u2019\u201A\u201B\u2032\uFF07]/g, "'");
+  s = s.replace(/[\uFF21-\uFF3A]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  s = s.replace(/[\uFF41-\uFF5A]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  s = s.replace(/[\uFF10-\uFF19]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  s = s.replace(/[\uFF1A]/g, ":");
 
-  // "D2S<숫자>:" 위치를 찾는다
-  const start = s.search(/D2S\d+:/);
+  // "D2S<숫자>:" 위치를 찾는다. 대소문자 무시 (d2s1: 로 복사되는 경우가 있음)
+  let start = s.search(/D2S\d+:/i);
+  // 헤더가 깨진 경우(예: 공백이 섞여 "D2S1 :", "D2 S1:") 대비
+  if (start < 0) start = s.search(/D2\s*S\s*\d+\s*:/i);
   if (start < 0) return null;
 
   // 그 지점부터 끝까지 가져와서 공백류를 모두 제거한다
   // (base64url 은 공백을 쓰지 않으므로 안전하게 이어붙일 수 있다)
   const rest = s.slice(start);
-  const code = rest.replace(/\s+/g, "");
+  const code = rest.replace(/[\s,;]+/g, "");
 
   // 코드 뒤에 다른 문구가 붙은 경우를 대비해, 허용 문자만 남긴다.
   // base64url: A-Z a-z 0-9 - _  그리고 헤더의 ':' 하나
-  const m = code.match(/^D2S\d+:[A-Za-z0-9_-]+/);
-  return m ? m[0] : null;
+  const m = code.match(/^D2S\d+:[A-Za-z0-9_-]+/i);
+  if (!m) return null;
+
+  // 헤더를 항상 대문자 D2S 로 정규화한다.
+  // (게임은 /^D2S(\d+):/ 대소문자 구분으로 검사하므로 소문자는 거부된다)
+  return m[0].replace(/^d2s/i, "D2S");
+}
+
+/* 붙여넣기 실패 시 원인을 알려주기 위한 진단 문자열 */
+function describeInput(input) {
+  const s = String(input || "");
+  const hasD2S = /D2S/i.test(s);
+  const first = s.trim().slice(0, 40).replace(/[\r\n]/g, "\\n");
+  const codes = [...s.slice(0, 40)].map(c => c.charCodeAt(0));
+  return `길이 ${s.length}, D2S 포함=${hasD2S ? "예" : "아니오"}, ` +
+         `앞부분="${first}", 코드값=[${codes.slice(0, 12).join(",")}]`;
 }
 
 /* ---------- 디코드 / 인코드 ---------- */
 async function decodeCode(code) {
   const text = extractSaveCode(code);
   if (!text) throw new Error("세이브 코드(D2S1:...)를 찾지 못했습니다. " +
-    "게임에서 Export 한 코드를 그대로 붙여넣어 주세요.");
+    "게임에서 Export 한 코드를 그대로 붙여넣어 주세요.\n진단: " + describeInput(code));
   const idx = text.indexOf(":");
   const head = text.slice(0, idx), payload = text.slice(idx + 1);
   const ver = parseInt(head.slice(3) || "0", 10);
   if (ver !== CODE_VERSION) throw new Error("지원하지 않는 코드 버전: " + head);
-  const raw = b64urlToBytes(payload);
-  if (raw[0] !== 0x78) throw new Error("deflate 헤더가 예상과 다릅니다: " + raw[0].toString(16));
-  const plain = await inflate(raw);
+
+  // base64url 은 대소문자를 구분하므로, 통째로 소문자/대문자로 변형된 코드는
+  // 정보가 이미 소실되어 원칙적으로 복구할 수 없다. 그래도 헤더(0x78)가
+  // 맞는 변형이 있으면 시도해 본다.
+  let raw = null;
+  const variants = [payload, payload.toUpperCase(), payload.toLowerCase()];
+  for (const p of variants) {
+    let bytes;
+    try { bytes = b64urlToBytes(p); } catch (e) { continue; }
+    if (bytes.length && bytes[0] === 0x78) { raw = bytes; break; }
+  }
+  if (!raw) {
+    let b0 = "없음";
+    try { const t = b64urlToBytes(payload); if (t.length) b0 = t[0].toString(16); } catch (e) {}
+    throw new Error(
+      "코드 본문이 손상되었습니다 (deflate 헤더 " + b0 + ").\n" +
+      "base64 는 대소문자를 구분하므로, 복사 과정에서 글자가 바뀌면 복구할 수 없습니다.\n" +
+      "게임 화면의 코드를 처음부터 다시 복사해 주세요."
+    );
+  }
+  let plain;
+  try {
+    plain = await inflate(raw);
+  } catch (e) {
+    throw new Error("압축을 풀지 못했습니다. 코드가 일부 잘렸을 수 있습니다. " +
+                    "전체를 다시 복사해 주세요.");
+  }
   const obj = JSON.parse(new TextDecoder().decode(plain));
   const seal = obj.seal;
   delete obj.seal;
