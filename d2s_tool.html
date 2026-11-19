@@ -995,6 +995,9 @@ async function output(summary) {
 /* 클립보드에 넣기. https 가 아니면 clipboard API 가 없으므로
    임시 textarea + execCommand 로 폴백한다. */
 async function copyText(text) {
+  // 모든 복사 경로에서 헤더를 마지막으로 정규화한다.
+  // Base64URL 본문은 대소문자가 데이터이므로 절대 변경하지 않는다.
+  text = normalizeExportHeader(text);
   if (navigator.clipboard && navigator.clipboard.writeText) {
     try {
       await navigator.clipboard.writeText(text);
@@ -1033,6 +1036,17 @@ function flashButton(btn, label, cls) {
   }, 1500);
 }
 
+// iOS 길게 누르기/키보드 등 textarea의 네이티브 복사도 정규화한다.
+$("out").addEventListener("copy", event => {
+  const out = $("out");
+  const normalized = normalizeExportHeader(out.value);
+  out.value = normalized;
+  if (event.clipboardData) {
+    event.clipboardData.setData("text/plain", normalized);
+    event.preventDefault();
+  }
+});
+
 $("btnCopy").addEventListener("click", async () => {
   const out = $("out");
   const t = normalizeExportHeader(out.value);
@@ -1060,7 +1074,9 @@ $("btnCopy").addEventListener("click", async () => {
 });
 
 $("btnDownload").addEventListener("click", () => {
-  const blob = new Blob([$("out").value + "\n"], { type: "text/plain" });
+  const out = $("out");
+  out.value = normalizeExportHeader(out.value);
+  const blob = new Blob([out.value + "\n"], { type: "text/plain" });
   const a = document.createElement("a");
   const d = new Date();
   const pad = n => String(n).padStart(2, "0");
